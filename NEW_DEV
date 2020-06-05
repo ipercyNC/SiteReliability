@@ -1,0 +1,118 @@
+#!/bin/bash
+#set variables for the script
+PROJECT=sre-the-cool-team
+gcloud config set project $PROJECT
+
+
+PRIMARY_PROD_NAME="test-thecoolteam-primaryprod"
+PRIMARY_PROD_IP="35.233.187.168"
+
+SECONDARY_PROD_NAME="test-thecoolteam-secondaryprod"
+SECONDARY_PROD_IP="34.83.156.98"
+
+PRIMARY_DEV_NAME="test-thecoolteam-primarydev"
+PRIMARY_DEV_IP="104.196.255.100"
+
+SECONDARY_DEV_NAME="test-thecoolteam-secondarydev"
+SECONDARY_DEV_IP="35.197.15.35"
+
+
+#PRODUCTION VALUES!!! ONLY UNCOMMENT IF WORKING!!
+#PRIMARY_PROD_NAME="thecoolteam-primaryprod"
+#PRIMARY_PROD_IP="34.82.57.14"
+
+#SECONDARY_PROD_NAME="thecoolteam-secondaryprod"
+#SECONDARY_PROD_IP="35.230.31.124"
+
+#PRIMARY_DEV_NAME="thecoolteam-primarydev"
+#PRIMARY_DEV_IP="35.199.156.41"
+
+#SECONDARY_DEV_NAME="thecoolteam-secondarydev"
+#SECONDARY_DEV_IP="34.83.228.169"
+
+echo "PRIMARY_DEV_NAME $PRIMARY_DEV_NAME SECONDARY_DEV_NAME $SECONDARY_DEV_NAME"
+echo "PRIMARY_PROD_NAME $PRIMARY_PROD_NAME SECONDARY_PROD_NAME $SECONDARY_PROD_NAME"
+DT=`date '+%Y%m%d%H%M%S'`
+
+#PRIMARY server
+###################
+#steps for the primary server
+SNAPSHOT_PRIMARY_DEV="newdev-${PRIMARY_DEV_NAME}-${DT}"
+SNAPSHOT_PRIMARY_PROD="newdev-${PRIMARY_PROD_NAME}-${DT}"
+echo "SNAPSHOT_PRIMARY_PROD $SNAPSHOT_PRIMARY_PROD SNAPSHOT_PRIMARY_DEV $SNAPSHOT_PRIMARY_DEV"
+
+#create snapshot of dev primary
+gcloud compute disks snapshot $PRIMARY_DEV_NAME  --zone=us-west1-b --snapshot-names=$SNAPSHOT_PRIMARY_DEV
+
+#create snapshot of prod primary
+gcloud compute disks snapshot $PRIMARY_PROD_NAME --zone=us-west1-b --snapshot-names=$SNAPSHOT_PRIMARY_PROD
+
+#delete dev primary
+gcloud compute instances delete $PRIMARY_DEV_NAME --zone=us-west1-b --quiet
+
+#create dev primary from prod snapshot
+gcloud compute --project "sre-the-cool-team" disks create "${PRIMARY_DEV_NAME}" --size "10" --zone "us-west1-b" --source-snapshot $SNAPSHOT_PRIMARY_PROD --type "pd-standard"
+
+gcloud beta compute --project=sre-the-cool-team instances create $PRIMARY_DEV_NAME --zone=us-west1-b --machine-type=g1-small --subnet=default --network-tier=PREMIUM --maintenance-policy=MIGRATE --service-account=773147072983-compute@developer.gserviceaccount.com --scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append --tags=http-server,https-server,postgres-5432 --disk=name=$PRIMARY_DEV_NAME,device-name=$PRIMARY_DEV_NAME,mode=rw,boot=yes,auto-delete=yes --reservation-affinity=any
+
+#assign dev primary the dev primary IP
+#assign to dev primary
+gcloud compute instances delete-access-config $PRIMARY_DEV_NAME --access-config-name "external-nat" --zone=us-west1-b
+gcloud compute instances delete-access-config $PRIMARY_DEV_NAME --access-config-name "External NAT" --zone=us-west1-b
+gcloud compute instances add-access-config $PRIMARY_DEV_NAME --access-config-name "external-nat" --zone=us-west1-b --address $PRIMARY_DEV_IP
+
+
+#SECONDARY server
+###################
+#steps for the SECONDARY server
+SNAPSHOT_SECONDARY_DEV="newdev-${SECONDARY_DEV_NAME}-${DT}"
+SNAPSHOT_SECONDARY_PROD="newdev-${SECONDARY_PROD_NAME}-${DT}"
+echo "SNAPSHOT_SECONDARY_PROD $SNAPSHOT_SECONDARY_PROD SNAPSHOT_SECONDARY_DEV $SNAPSHOT_SECONDARY_DEV"
+
+#create snapshot of dev SECONDARY
+gcloud compute disks snapshot $SECONDARY_DEV_NAME  --zone=us-west1-b --snapshot-names=$SNAPSHOT_SECONDARY_DEV
+
+#create snapshot of prod SECONDARY
+gcloud compute disks snapshot $SECONDARY_PROD_NAME --zone=us-west1-b --snapshot-names=$SNAPSHOT_SECONDARY_PROD
+
+#delete dev SECONDARY
+gcloud compute instances delete $SECONDARY_DEV_NAME --zone=us-west1-b --quiet
+
+#create dev SECONDARY from prod snapshot
+gcloud compute --project "sre-the-cool-team" disks create "${SECONDARY_DEV_NAME}" --size "10" --zone "us-west1-b" --source-snapshot $SNAPSHOT_SECONDARY_PROD --type "pd-standard"
+
+gcloud beta compute --project=sre-the-cool-team instances create $SECONDARY_DEV_NAME --zone=us-west1-b --machine-type=g1-small --subnet=default --network-tier=PREMIUM --maintenance-policy=MIGRATE --service-account=773147072983-compute@developer.gserviceaccount.com --scopes=https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append --tags=http-server,https-server,postgres-5432 --disk=name=$SECONDARY_DEV_NAME,device-name=$SECONDARY_DEV_NAME,mode=rw,boot=yes,auto-delete=yes --reservation-affinity=any
+
+#assign dev SECONDARY the dev SECONDARY IP
+#assign to dev SECONDARY
+gcloud compute instances delete-access-config $SECONDARY_DEV_NAME --access-config-name "external-nat" --zone=us-west1-b
+gcloud compute instances delete-access-config $SECONDARY_DEV_NAME --access-config-name "External NAT" --zone=us-west1-b
+gcloud compute instances add-access-config $SECONDARY_DEV_NAME --access-config-name "external-nat" --zone=us-west1-b --address $SECONDARY_DEV_IP
+
+
+#POSTGRESQL HOTSTANDY COMMENT AND UNCOMMENT
+#PRIMARY SERVER CONFIGS
+
+#PRIMARY DEV
+gcloud compute ssh $PRIMARY_DEV_NAME --zone=us-west1-b --quiet -- \
+"sudo sed -i -e "/secondaryprod/s/^#*/#/" ../../etc/postgresql/10/main/pg_hba.conf;\
+sudo sed -i -e "/secondarydev/s/^#//" ../../etc/postgresql/10/main/pg_hba.conf;\
+sudo sed -i -e "/primaryprod/s/^#*/#/" /etc/nginx/sites-enabled/sreproject;\
+sudo sed -i -e "/primarydev/s/^#//" /etc/nginx/sites-enabled/sreproject;\
+sudo service postgresql restart;\
+service supervisor stop;\
+service supervisor start;"
+
+#SECONDARY DEV
+gcloud compute ssh $SECONDARY_DEV_NAME --zone=us-west1-b --quiet -- \
+"sudo service postgresql stop;\
+sudo sed -i -e "/primaryprod/s/^#*/#/" ../../var/lib/postgresql/10/main/recovery.conf;\
+sudo sed -i -e "/primarydev/s/^#//" ../../var/lib/postgresql/10/main/recovery.conf;\
+sudo sed -i -e "/secondaryprod/s/^#*/#/" /etc/nginx/sites-enabled/sreproject;\
+sudo sed -i -e "/secondarydev/s/^#//" /etc/nginx/sites-enabled/sreproject;\
+sudo mv ../../var/lib/postgresql/10/main ../../var/lib/postgresql/10/main_old_$DT;\
+sudo PGPASSWORD="repuserpassword" -u postgres pg_basebackup -h $PRIMARY_DEV_IP -D /var/lib/postgresql/10/main -w -U repuser -v -P -X stream;\
+cp -avr ../../var/lib/postgresql/10/main_old_$DT/recovery.conf ../../var/lib/postgresql/10/main/recovery.conf;\
+sudo service postgresql start;\
+service supervisor stop;\
+service supervisor start;"
